@@ -5,9 +5,70 @@ import time
 import pybullet_data
 import numpy as np
 import sympy as sp
+import faulthandler
+faulthandler.enable()
 
 
 robot_urdf = "kuka_lbr_iiwa_support/urdf/lbr_iiwa_14_r820.urdf"
+
+
+
+import pybullet as p
+import numpy as np
+
+def calculateInvDynamics(joint_positions, joint_velocities, joint_accelerations, robot_id):
+    num_joints = len(joint_positions)
+    joint_forces = np.zeros(num_joints)
+
+    for i in range(num_joints):
+        joint_position = joint_positions[i]
+        joint_velocity = joint_velocities[i]
+        joint_acceleration = joint_accelerations[i]
+
+        joint_info = p.getJointInfo(robot_id, i)
+        joint_mass = joint_info[10]  # Index 10 corresponds to the joint mass
+        joint_inertia = joint_info[11]  # Index 11 corresponds to the joint inertia
+
+        # Compute Coriolis and centrifugal forces (set to zero in this example)
+        coriolis_centrifugal = 0.0
+
+        # Compute gravitational forces
+        gravitational_force = joint_mass * 9.8 * np.sin(joint_position)
+
+        # Compute joint forces using Newton-Euler dynamics equations
+        joint_forces[i] = joint_inertia * joint_acceleration + coriolis_centrifugal + gravitational_force
+
+    return joint_forces
+
+
+
+def compute_coriolis_matrix_v2(joint_positions, joint_velocities, joint_accelerations,robot):
+    # Demux the input variable
+    # q = qdq[:len(qdq)//2]
+    # dq = qdq[len(qdq)//2:]
+
+    # Calculation of the Coriolis matrix using the method by Corke
+    N = len(joint_positions)
+    C = np.zeros((N, N))
+    Csq = np.zeros((N, N))
+
+    for j in range(N):
+        QD = np.zeros(N)
+        QD[j] = 1
+        tau = calculateInvDynamics(joint_positions, joint_velocities, joint_accelerations, robot)
+        Csq[:, j] = Csq[:, j] + tau
+
+    for j in range(N):
+        for k in range(j + 1, N):
+            QD = np.zeros(N)
+            QD[j] = 1
+            QD[k] = 1
+            tau = calculateInvDynamics(joint_positions, joint_velocities, joint_accelerations, robot)
+            C[:, k] = C[:, k] + (tau - Csq[:, k] - Csq[:, j]) * joint_velocities[j]
+
+    C = C + np.dot(Csq, np.diag(joint_velocities))
+
+    return C
 
 
 def main():
@@ -49,57 +110,82 @@ def main():
 
     # Display in the simulation how the robot goes from initial position, to our desired position
     for i in range(100):
-        print(i)
+        #print(i)
         p.stepSimulation()
 
         # Retrieve joint positions and velocities
         joint_positions = []
         joint_velocities = []
+        joint_names = []
+        joint_dof = []
+        #print(num_joints)
         for joint_index in range(num_joints):
             joint_state = p.getJointState(robot, joint_index)
+            joint_info = p.getJointInfo(robot, joint_index)
+            joint_names.append(joint_info[1].decode("utf-8"))  # Decode joint name from bytes to string
+            joint_dof.append(joint_info[3])
             joint_positions.append(joint_state[0])
             joint_velocities.append(joint_state[1])
 
-        print(f"Joint positions: {joint_positions}")
-        print(f"Joint velocities: {joint_velocities}")
-        ###############################################################
-        # Retrieve the inertia matrix for each joint
-        inertia_matrices = []
-        for joint_index in range(num_joints):
-            dynamics_info = p.getDynamicsInfo(robot, joint_index)
-            inertia_matrix = list(dynamics_info[2])
+        
+        #print(f"Joint names: {joint_names}")
+        #print(f"Joint dofs: {joint_dof}")
+       
+        fixed_joints = joint_dof.count(-1)
+        joint_velocities = joint_velocities[:-fixed_joints]
+        joint_positions = joint_positions[:-fixed_joints]
 
-            while len(inertia_matrix) < num_joints:
-                inertia_matrix.append(0)
+        #print(f"Joint positions: {joint_positions}")
+        #print(f"Joint velocities: {joint_velocities}")
 
-            inertia_matrix = np.array(inertia_matrix)
+        inertia_matrix = p.calculateMassMatrix(robot,joint_positions)
+        #print("Inertia: ",np.array(inertia_matrix).shape)
+         
 
-            inertia_matrices.append(inertia_matrix)
+        # ###############################################################
+        # # Retrieve the inertia matrix for each joint
+        # inertia_matrices = []
+        # for joint_index in range(num_joints):
+        #     dynamics_info = p.getDynamicsInfo(robot, joint_index)
+        #     inertia_matrix = list(dynamics_info[2])
 
-        inertia_matrices = np.array(inertia_matrices)
-        joint_velocities = np.transpose(joint_velocities)
+        #     while len(inertia_matrix) < num_joints:
+        #         inertia_matrix.append(0)
+
+        #     inertia_matrix = np.array(inertia_matrix)
+
+        #     inertia_matrices.append(inertia_matrix)
+
+        # inertia_matrices = np.array(inertia_matrices)
+        # joint_velocities = np.transpose(joint_velocities)
 
         ################################################################
 
         # Compute p(t) as M * q_dot
         print("Calculating momentum")
-        p_t = np.dot(inertia_matrices, joint_velocities)
+        p_t = np.dot(inertia_matrix, np.transpose(joint_velocities))
+        #print(f"p(t): {p_t}")
 
-        print(f"p(t): {p_t}")
-        ################################################################
+       
+
+
+        # ###############################################################
 
         # # Compute the Coriolis matrix
         # print("Computing coriolis matrix")
         # zero_accelerations = np.zeros(num_joints)
+        # print(zero_accelerations)
+
+
         # coriolis_matrix = p.calculateInverseDynamics(robot, joint_positions, joint_velocities, zero_accelerations)
 
         # print(f"Coriolis matrix: {coriolis_matrix}")
-        ################################################################
+        # ################################################################
         # # Compute the gravity matrix
         # zero_velocities = np.zeros(num_joints)
         # print("Computing gravity matrix")
         # gravity_matrix = p.calculateInverseDynamics(robot, joint_positions, zero_velocities, zero_accelerations)
-        #
+        
         # print(f"Gravity matrix: {gravity_matrix}")
         ################################################################
         # Compute joint accelerations using finite difference method
@@ -112,28 +198,12 @@ def main():
 
         prev_joint_velocities = joint_velocities
 
-        ################################################################
-        # Define symbolic variables
-        q = sp.symbols('q:{}'.format(num_joints))  # Joint positions
-        qd = sp.symbols('qd:{}'.format(num_joints))  # Joint velocities
-        qdd = sp.symbols('qdd:{}'.format(num_joints))  # Joint accelerations
-
-        # Compute the Coriolis and centrifugal terms symbolically
-        C = sp.Matrix([sp.diff(inertia_matrices, qd[j]).dot(qd) for j in range(num_joints)]) / 2
-
-        # Substitute the numerical values for joint positions and velocities
-        C = C.subs(list(zip(q, joint_positions))).subs(list(zip(qd, joint_velocities)))
-
-        # Evaluate the Coriolis and centrifugal terms
-        coriolisCentrifugal = np.array(C.evalf()).astype(float)
+        C = compute_coriolis_matrix_v2(joint_positions, joint_velocities, joint_accelerations,robot)
+        print(C)
+        print(C.shape)
 
         ################################################################
 
-        total_torque = np.dot(inertia_matrices, joint_accelerations) + np.dot(C, joint_velocities) + gravity_matrix
-
-        print(f"total torque: {total_torque}")
-
-        print("---------------------------------------------")
 
         # This is just a placeholder to generate a collision at a random link of the robot
         if i == 20:
