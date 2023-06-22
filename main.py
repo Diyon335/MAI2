@@ -1,3 +1,4 @@
+import copy
 import random
 
 import pybullet as p
@@ -53,8 +54,9 @@ def main():
     r_0 = None
     previous_velocities = None
 
-    gain_values = [1.0, 0.5, 0.8, 1.0, 0.5, 0.8, 1.0]
+    gain_values = [0.01] * 7
     gain_matrix = np.diag(gain_values)
+    print(gain_matrix)
 
     residuals = []
     time_steps = []
@@ -76,8 +78,10 @@ def main():
         joint_names = []
         joint_types = []
         joint_indexes = []
+        joint_velocities_3D = []
 
         for joint_index in range(num_joints):
+            link_state = p.getLinkState(robot, joint_index, computeLinkVelocity=1, computeForwardKinematics=1)
             joint_state = p.getJointState(robot, joint_index)
             joint_info = p.getJointInfo(robot, joint_index)
 
@@ -91,18 +95,21 @@ def main():
 
             j_velocity = joint_state[1]
             j_position = joint_state[0]
+            j_velocity_3D = link_state[6]
 
             joint_positions.append(j_position)
             joint_velocities.append(j_velocity)
             joint_names.append(j_name)
             joint_indexes.append(j_index)
             joint_types.append(j_type)
+            joint_velocities_3D.append(j_velocity_3D)
 
         # print(joint_positions)
         # print(joint_velocities)
         # print(joint_names)
         # print(joint_types)
         # print(joint_indexes)
+        print(joint_velocities_3D)
 
         ################################################################
 
@@ -140,18 +147,12 @@ def main():
         # print(f"Joint accelerations: {joint_accelerations}")
 
         #################################################################
-        # TODO: CHECK IF THIS WORKS
-        C = compute_coriolis_matrix_v2(joint_positions, joint_velocities, joint_accelerations, robot)
+        C = compute_coriolis_matrix(robot, joint_positions, joint_velocities, joint_accelerations)
 
         # print(f"Coriolis Matrix: {C}")
         # print(f"Coriolis matrix shape: {C.shape}")
 
         #################################################################
-
-        gravity_matrix = calculateGravityMatrix(robot, joint_positions, joint_velocities, joint_accelerations)
-
-        # print(f"Gravity matrix: {gravity_matrix}")
-        # print(f"Gravity matrix shape: {gravity_matrix.shape}")
 
         if i == 100:
             # Retrieve the link positions and orientations
@@ -188,13 +189,13 @@ def main():
 
         ##################### Algorithm ################################
 
-        tau = np.dot(inertia_matrix, joint_accelerations) + np.dot(C, joint_velocities) + gravity_matrix
+        tau = np.dot(inertia_matrix, joint_accelerations) + np.dot(C, joint_velocities)
 
         # print(f"Torque: {tau}")
 
         last_residual = residuals[-1]
 
-        integral_sum = tau + np.dot(np.transpose(C), joint_velocities) - gravity_matrix + np.array(last_residual)
+        integral_sum = tau + np.dot(np.transpose(C), joint_velocities) + np.array(last_residual)
         integral = integral_sum * current_time
 
         final_sum = p_t - integral - p_0
@@ -240,70 +241,41 @@ def main():
     p.disconnect()
 
 
-def calculateInvDynamics(joint_positions, joint_velocities, joint_accelerations, robot_id):
-    num_joints = len(joint_positions)
-    joint_forces = np.zeros(num_joints)
+def compute_coriolis_matrix(robot, joint_positions, joint_velocities, joint_accelerations):
 
-    for i in range(num_joints):
-        joint_position = joint_positions[i]
-        joint_velocity = joint_velocities[i]
-        joint_acceleration = joint_accelerations[i]
-
-        joint_info = p.getJointInfo(robot_id, i)
-        joint_mass = joint_info[10]  # Index 10 corresponds to the joint mass
-        joint_inertia = joint_info[11]  # Index 11 corresponds to the joint inertia
-
-        # Compute Coriolis and centrifugal forces (set to zero in this example)
-        coriolis_centrifugal = 0.0
-
-        # Compute gravitational forces
-        gravitational_force = joint_mass * 9.8 * np.sin(joint_position)
-
-        # Compute joint forces using Newton-Euler dynamics equations
-        joint_forces[i] = joint_inertia * joint_acceleration + coriolis_centrifugal + gravitational_force
-
-    return joint_forces
-
-
-def compute_coriolis_matrix_v2(joint_positions, joint_velocities, joint_accelerations, robot):
-    # Demux the input variable
-    # q = qdq[:len(qdq)//2]
-    # dq = qdq[len(qdq)//2:]
-
-    # Calculation of the Coriolis matrix using the method by Corke
     N = len(joint_positions)
-    C = np.zeros((N, N))
-    Csq = np.zeros((N, N))
 
-    for j in range(N):
+    C = np.zeros(shape=(N, N))
+
+    Csq = copy.copy(C)
+
+    for i in range(N):
+
         QD = np.zeros(N)
-        QD[j] = 1
-        tau = calculateInvDynamics(joint_positions, joint_velocities, joint_accelerations, robot)
-        Csq[:, j] = Csq[:, j] + tau
+        QD[i] = 1
+
+        tau = p.calculateInverseDynamics(robot, list(joint_positions), list(joint_velocities),
+                                         list(joint_accelerations))
+        tau = np.array(tau)
+
+        Csq[:, i] = Csq[:, i] + np.transpose(tau)
 
     for j in range(N):
         for k in range(j + 1, N):
+
             QD = np.zeros(N)
             QD[j] = 1
             QD[k] = 1
-            tau = calculateInvDynamics(joint_positions, joint_velocities, joint_accelerations, robot)
-            C[:, k] = C[:, k] + (tau - Csq[:, k] - Csq[:, j]) * joint_velocities[j]
 
-    C = C + np.dot(Csq, np.diag(joint_velocities))
+            tau = p.calculateInverseDynamics(robot, list(joint_positions), list(joint_velocities),
+                                             list(joint_accelerations))
+            tau = np.array(tau)
 
-    return C
+            product_term = np.transpose(tau) - Csq[:, k] - Csq[:, j]
 
+            C[:, k] = C[:, k] + np.dot(product_term, joint_velocities[j])
 
-def calculateGravityMatrix(robot, joint_positions, joint_velocities, joint_accelerations):
-    num_joints = p.getNumJoints(robot)
-    # joint_velocities = [0.0] * num_joints  # Zero joint velocities
-    # joint_accelerations = [0.0] * num_joints  # Zero joint accelerations
-
-    joint_forces = calculateInvDynamics(joint_positions, joint_velocities, joint_accelerations, robot)
-
-    gravity_matrix = np.array(joint_forces)
-
-    return gravity_matrix
+    return C + Csq + np.diag(joint_velocities)
 
 
 def plot_graph(title, figure_name, variable_name, variables, time_steps):
