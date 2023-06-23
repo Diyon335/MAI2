@@ -6,10 +6,11 @@ import time
 import pybullet_data
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 
 robot_urdf = "kuka_lbr_iiwa_support/urdf/lbr_iiwa_14_r820.urdf"
-simulation_steps = 1000
+collision_index = 100
 
 
 def main():
@@ -50,18 +51,23 @@ def main():
     time_step = 1/240
     p.setTimeStep(time_step)
 
+    simulation_steps = 1000
+
     p_0 = None
     r_0 = None
     previous_velocities = None
+    selected_link = None
 
     gain_values = [0.01] * 7
     gain_matrix = np.diag(gain_values)
-    print(gain_matrix)
+    # print(gain_matrix)
 
     residuals = []
     time_steps = []
     all_joint_velocities = []
     all_momenta = []
+    all_link_positions = {i: [] for i in range(num_joints)}
+    kinetic_energy = []
 
     # Display in the simulation how the robot goes from initial position, to our desired position
     for i in range(simulation_steps):
@@ -90,6 +96,9 @@ def main():
             if j_type > 0:
                 continue
 
+            link_pos = link_state[4]
+            all_link_positions[joint_index].append(link_pos)
+
             j_name = joint_info[1].decode("utf-8")
             j_index = joint_info[0]
 
@@ -109,7 +118,7 @@ def main():
         # print(joint_names)
         # print(joint_types)
         # print(joint_indexes)
-        print(joint_velocities_3D)
+        # print(joint_velocities_3D)
 
         ################################################################
 
@@ -117,6 +126,11 @@ def main():
 
         # print(f"Inertia matrix: {inertia_matrix}")
         # print(inertia_matrix.shape)
+
+        #################################################################
+
+        ke = 0.5 * np.matrix(joint_velocities) * inertia_matrix * np.matrix(joint_velocities).transpose()
+        kinetic_energy.append(ke.item(0, 0))
 
         #################################################################
 
@@ -152,9 +166,39 @@ def main():
         # print(f"Coriolis Matrix: {C}")
         # print(f"Coriolis matrix shape: {C.shape}")
 
+        ########################## Coriolis Matrix Check #################
+
+        # matches = []
+        # affected_joints = [0, 3, 5]
+        # delta_q = 0.001
+        # dq = copy.copy(joint_positions)
+        #
+        # for joint in affected_joints:
+        #     dq[joint] += delta_q
+        #
+        # dq_ = [q + q_ for q, q_ in zip(joint_positions, dq)]
+        # M_k = inertia_matrix / dq_
+        #
+        # dM_dt = np.zeros(shape=M_k.shape)
+        #
+        # rows, cols = M_k.shape
+        #
+        # coriolis_check = C + np.transpose(C)
+        #
+        # for row in range(rows):
+        #     for col in range(cols):
+        #         dM_dt[row][col] = (inertia_matrix[row][col] - M_k[row][col]) / time_step
+        #
+        #         if dM_dt[row][col] == coriolis_check[row][col]:
+        #             matches.append(True)
+        #         else:
+        #             matches.append(False)
+        #
+        # print(f"Coriolis computation is valid: {all(matches)}")
+
         #################################################################
 
-        if i == 100:
+        if i == collision_index:
             # Retrieve the link positions and orientations
             link_states = p.getLinkStates(robot, range(7))
 
@@ -165,6 +209,7 @@ def main():
             random_index = random.randint(3, len(link_positions) - 1)
 
             # Get the position and orientation of the randomly selected link
+            selected_link = random_index
             selected_link_position = link_positions[random_index]
             selected_link_orientation = link_orientations[random_index]
 
@@ -174,7 +219,6 @@ def main():
 
             print("FORCE APPLIED AT LINK", random_index)
             print(f"FORCE APPLIED AT TIME: {current_time}")
-            time.sleep(5)
 
             # Create a visual marker at the selected point
             marker_size = 0.05
@@ -204,7 +248,7 @@ def main():
 
         residuals.append(new_residual)
 
-        print(f"New residual: {new_residual}")
+        # print(f"New residual: {new_residual}")
 
         #####################################################
 
@@ -213,8 +257,20 @@ def main():
         if current_time > 1.0:
             break
 
+        # time.sleep(0.25)
+
     # Remove initial residual value
     residuals.pop(0)
+
+    print(time_steps)
+
+    index = time_steps.index(0.0875)
+
+    time_steps = time_steps[index:]
+    residuals = residuals[index:]
+    all_momenta = all_momenta[index:]
+    all_joint_velocities = all_joint_velocities[index:]
+    kinetic_energy = kinetic_energy[index:]
 
     plot_graph("Plot of residuals over time",
                "residuals",
@@ -226,7 +282,7 @@ def main():
 
     plot_graph("Plot of momenta over time",
                "momenta",
-               "Momentum (kg/ms-2)",
+               "Momentum (kg/rad s-2)",
                all_momenta,
                time_steps)
 
@@ -234,9 +290,26 @@ def main():
 
     plot_graph("Plot of velocity over time",
                "velocities",
-               "Velocity (ms-1)",
+               "Velocity (rad s-1)",
                all_joint_velocities,
                time_steps)
+
+    plt.clf()
+
+    plot_scalar_graph("Plot of kinetic energy over time",
+                      "kinetic_energy",
+                      "Kinetic Energy",
+                      kinetic_energy,
+                      time_steps)
+
+    plt.clf()
+
+    positions = all_link_positions[selected_link]
+    positions = positions[index:]
+    plot_3d_graph("Plot of collision-affected link movement",
+                  "link_movement",
+                  "Euclidean distance",
+                  positions)
 
     p.disconnect()
 
@@ -278,6 +351,20 @@ def compute_coriolis_matrix(robot, joint_positions, joint_velocities, joint_acce
     return C + Csq + np.diag(joint_velocities)
 
 
+def plot_scalar_graph(title, figure_name, variable_name, variables, time_steps):
+
+    timesteps = np.array(time_steps)
+
+    plt.plot(timesteps, np.array(variables))
+
+    plt.xlabel('Time (s)')
+    plt.ylabel(variable_name)
+    plt.title(title)
+    plt.legend()
+
+    plt.savefig(figure_name+".png")
+
+
 def plot_graph(title, figure_name, variable_name, variables, time_steps):
 
     vel = np.array(variables)
@@ -290,6 +377,32 @@ def plot_graph(title, figure_name, variable_name, variables, time_steps):
     plt.ylabel(variable_name)
     plt.title(title)
     plt.legend()
+
+    plt.savefig(figure_name+".png")
+
+
+def plot_3d_graph(title, figure_name, variable_name, variables):
+
+    x = [point[0] for point in variables]
+    y = [point[1] for point in variables]
+    z = [point[2] for point in variables]
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(x, y, z)
+
+    highlight_index = collision_index
+    ax.scatter(x[highlight_index], y[highlight_index], z[highlight_index], color='red', s=100)
+
+    ax.set_xlim(min(x), max(x))
+    ax.set_ylim(min(y), max(y))
+    ax.set_zlim(min(z), max(z))
+
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
+
+    ax.set_title(title)
 
     plt.savefig(figure_name+".png")
 
