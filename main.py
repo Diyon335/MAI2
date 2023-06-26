@@ -75,20 +75,21 @@ def main():
     kinetic_energy = []
 
     # Display in the simulation how the robot goes from initial position, to our desired position
-    #for i in range(simulation_steps):
+
     startTime = time.time()
-    i=-1
-    force_not_applied=True
+    i = -1
+    force_not_applied = True
+
     while int(time.time() - startTime) < duration:
-        i=i+1
+        i = i+1
         #print(i)
         
         p.stepSimulation()
         time.sleep(time_step)
 
         if force_not_applied:
-            curr_pos = [state[0] for state in  p.getJointStates(robot, range(7))]
-            move = [ele1+ele2 for ele1,ele2 in zip(curr_pos,change)]
+            curr_pos = [state[0] for state in p.getJointStates(robot, range(7))]
+            move = [ele1+ele2 for ele1, ele2 in zip(curr_pos, change)]
             # Set all joints to the final desired position
             for jointIndex in range(num_joints):
                 p.setJointMotorControlArray(robot, range(7), p.POSITION_CONTROL, move)
@@ -148,9 +149,9 @@ def main():
         # print(inertia_matrix.shape)
 
         #################################################################
-
-        ke = 0.5 * np.matrix(joint_velocities) * inertia_matrix * np.matrix(joint_velocities).transpose()
-        kinetic_energy.append(ke.item(0, 0))
+        ke = np.linalg.multi_dot([np.array(joint_velocities), inertia_matrix,
+                                  np.array(joint_velocities).reshape(-1, 1)])
+        kinetic_energy.append(ke[0])
 
         #################################################################
 
@@ -180,49 +181,20 @@ def main():
 
         # print(f"Joint accelerations: {joint_accelerations}")
 
-        # Calculate joint forces acting on the robot - This involves the Centrifugal Coriolis and the gravity forces together. 
-        joint_torques = p.calculateInverseDynamics(robot, list(joint_positions), list(joint_velocities), list(joint_accelerations))
-        joint_torques_gravity = p.calculateInverseDynamics(robot, list(joint_positions), list(joint_velocities), [0.0] * len(joint_positions))
+        # Calculate joint forces acting on the robot
+        tau = p.calculateInverseDynamics(robot, list(joint_positions), list(joint_velocities),
+                                                   list(joint_accelerations))
 
-        joint_torques_coriolis = [total_torque - gravity_torque for total_torque, gravity_torque in zip(joint_torques, joint_torques_gravity)]
+        gravity_vector = p.calculateInverseDynamics(robot, list(joint_positions), [0.0] * len(joint_positions), [0.0] *
+                                                    len(joint_positions))
 
-        #print("C:",joint_torques_coriolis)
+        inertia_accelerations = np.dot(inertia_matrix, np.array(joint_accelerations))
 
-        #################################################################
-        #C = compute_coriolis_matrix(robot, joint_positions, joint_velocities, joint_accelerations)
-
-        # print(f"Coriolis Matrix: {C}")
+        C = np.subtract(tau, gravity_vector)
+        C = np.subtract(C, inertia_accelerations)
+        C = np.divide(C, np.array(joint_velocities).reshape(-1, 1))
+        # print(f"Coriolis matrix: {C}")
         # print(f"Coriolis matrix shape: {C.shape}")
-
-        ########################## Coriolis Matrix Check #################
-
-        # matches = []
-        # affected_joints = [0, 3, 5]
-        # delta_q = 0.001
-        # dq = copy.copy(joint_positions)
-        #
-        # for joint in affected_joints:
-        #     dq[joint] += delta_q
-        #
-        # dq_ = [q + q_ for q, q_ in zip(joint_positions, dq)]
-        # M_k = inertia_matrix / dq_
-        #
-        # dM_dt = np.zeros(shape=M_k.shape)
-        #
-        # rows, cols = M_k.shape
-        #
-        # coriolis_check = C + np.transpose(C)
-        #
-        # for row in range(rows):
-        #     for col in range(cols):
-        #         dM_dt[row][col] = (inertia_matrix[row][col] - M_k[row][col]) / time_step
-        #
-        #         if dM_dt[row][col] == coriolis_check[row][col]:
-        #             matches.append(True)
-        #         else:
-        #             matches.append(False)
-        #
-        # print(f"Coriolis computation is valid: {all(matches)}")
 
         #################################################################
 
@@ -261,24 +233,25 @@ def main():
                                             baseOrientation=selected_link_orientation)
 
         ##################### Algorithm ################################
-
-        #tau = np.dot(inertia_matrix, joint_accelerations) + joint_torques_coriolis + joint_torques_gravity
-
-        # print(f"Torque: {tau}")
+        if i == 0:
+            continue
 
         last_residual = residuals[-1]
+        C_transpose = np.transpose(C)
+        product = np.dot(C_transpose, np.array(joint_velocities))
 
-        #integral_sum = tau + np.dot(np.transpose(C), joint_velocities) + np.array(last_residual)
-        #integral_sum = tau + joint_torques_coriolis+ joint_torques_gravity +  np.array(last_residual)
-        integral_sum = joint_torques_coriolis +  np.array(last_residual)
+        integral_sum = np.add(np.array(tau), product)
+        integral_sum = np.add(integral_sum, np.array(last_residual))
+        integral_sum = np.subtract(integral_sum, gravity_vector)
+
         integral = integral_sum * current_time
-
-        final_sum = p_t - integral - p_0
-
+        final_sum = np.subtract(p_t, integral)
+        final_sum = np.subtract(final_sum, p_0)
         new_residual = np.dot(gain_matrix, final_sum)
 
         residuals.append(new_residual)
         threshold = 40
+
         if any(abs(num) > threshold for num in new_residual):
             result_index = find_index_closer_to_zero(new_residual)
             if result_index is not None:
@@ -287,29 +260,16 @@ def main():
             else:
                 print("No high number found with subsequent numbers closer to 0.")
 
-        # print(f"New residual: {new_residual}")
+        print(f"New residual: {new_residual}")
 
         #####################################################
 
-        # TODO: Stop the simulation based on residuals
-
-        # if current_time > 1.0:
-        #     break
-
-        #time.sleep(0.25)
-
     # Remove initial residual value
     residuals.pop(0)
-
-    #print(time_steps)
-
-    # index = time_steps.index(0.0875)
-
-    # time_steps = time_steps[index:]
-    # residuals = residuals[index:]
-    # all_momenta = all_momenta[index:]
-    # all_joint_velocities = all_joint_velocities[index:]
-    # kinetic_energy = kinetic_energy[index:]
+    time_steps.pop(0)
+    all_momenta.pop(0)
+    all_joint_velocities.pop(0)
+    kinetic_energy.pop(0)
 
     plot_graph("Plot of residuals over time",
                "residuals",
@@ -344,50 +304,13 @@ def main():
     plt.clf()
 
     positions = all_link_positions[selected_link]
-    #positions = positions[index:]
+
     plot_3d_graph("Plot of collision-affected link movement",
                   "link_movement",
                   "Euclidean distance",
                   positions)
 
     p.disconnect()
-
-
-def compute_coriolis_matrix(robot, joint_positions, joint_velocities, joint_accelerations):
-
-    N = len(joint_positions)
-
-    C = np.zeros(shape=(N, N))
-
-    Csq = copy.copy(C)
-
-    for i in range(N):
-
-        QD = np.zeros(N)
-        QD[i] = 1
-
-        tau = p.calculateInverseDynamics(robot, list(joint_positions), list(joint_velocities),
-                                         list(joint_accelerations))
-        tau = np.array(tau)
-
-        Csq[:, i] = Csq[:, i] + np.transpose(tau)
-
-    for j in range(N):
-        for k in range(j + 1, N):
-
-            QD = np.zeros(N)
-            QD[j] = 1
-            QD[k] = 1
-
-            tau = p.calculateInverseDynamics(robot, list(joint_positions), list(joint_velocities),
-                                             list(joint_accelerations))
-            tau = np.array(tau)
-
-            product_term = np.transpose(tau) - Csq[:, k] - Csq[:, j]
-
-            C[:, k] = C[:, k] + np.dot(product_term, joint_velocities[j])
-
-    return C + Csq + np.diag(joint_velocities)
 
 
 def plot_scalar_graph(title, figure_name, variable_name, variables, time_steps):
