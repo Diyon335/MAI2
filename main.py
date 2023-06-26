@@ -33,32 +33,37 @@ def main():
     # Get the number of joints
     num_joints = p.getNumJoints(robot)
 
+    duration=5
+    time_step = 1/240
+    p.setTimeStep(time_step)
+
+    simulation_steps = int(duration/time_step)
+
     # Give the final orientation and joint positions of the robot
     final_orientation = p.getQuaternionFromEuler([3.14, 0, 0])
     final_joint_positions = p.calculateInverseKinematics(robot,
                                                          7,
                                                          [0.1, 0.1, 0.4],
-                                                         targetOrientation=final_orientation
+                                                         targetOrientation=final_orientation,
+                                                         maxNumIterations = 5*simulation_steps
                                                          )
+    
+    print(final_joint_positions)
 
-    # Set all joints to the final desired position
-    p.setJointMotorControlArray(robot,
-                                range(7),
-                                p.POSITION_CONTROL,
-                                targetPositions=final_joint_positions
-                                )
+    duration = 20  # Duration in seconds
+    change=[]
+    for jointIndex in range(num_joints-2):
+        #targetPositions[jointIndex] = jointPositions[jointIndex]  # Set initial target positions to starting configuration
+        change.append(final_joint_positions[jointIndex] / duration)  # Calculate increment for each joint
+    print(change)
 
-    time_step = 1/240
-    p.setTimeStep(time_step)
-
-    simulation_steps = 1000
 
     p_0 = None
     r_0 = None
     previous_velocities = None
     selected_link = None
 
-    gain_values = [0.01] * 7
+    gain_values = [0.007] * 7
     gain_matrix = np.diag(gain_values)
     # print(gain_matrix)
 
@@ -70,11 +75,26 @@ def main():
     kinetic_energy = []
 
     # Display in the simulation how the robot goes from initial position, to our desired position
-    for i in range(simulation_steps):
-
+    #for i in range(simulation_steps):
+    startTime = time.time()
+    i=-1
+    force_not_applied=True
+    while int(time.time() - startTime) < duration:
+        i=i+1
+        #print(i)
+        
         p.stepSimulation()
+        time.sleep(time_step)
 
-        current_time = i * time_step
+        if force_not_applied:
+            curr_pos = [state[0] for state in  p.getJointStates(robot, range(7))]
+            move = [ele1+ele2 for ele1,ele2 in zip(curr_pos,change)]
+            # Set all joints to the final desired position
+            for jointIndex in range(num_joints):
+                p.setJointMotorControlArray(robot, range(7), p.POSITION_CONTROL, move)
+
+        current_time = time.time()-startTime
+        #print(current_time)
         time_steps.append(current_time)
         # print(f"Time step: {current_time}")
 
@@ -160,8 +180,16 @@ def main():
 
         # print(f"Joint accelerations: {joint_accelerations}")
 
+        # Calculate joint forces acting on the robot - This involves the Centrifugal Coriolis and the gravity forces together. 
+        joint_torques = p.calculateInverseDynamics(robot, list(joint_positions), list(joint_velocities), list(joint_accelerations))
+        joint_torques_gravity = p.calculateInverseDynamics(robot, list(joint_positions), list(joint_velocities), [0.0] * len(joint_positions))
+
+        joint_torques_coriolis = [total_torque - gravity_torque for total_torque, gravity_torque in zip(joint_torques, joint_torques_gravity)]
+
+        #print("C:",joint_torques_coriolis)
+
         #################################################################
-        C = compute_coriolis_matrix(robot, joint_positions, joint_velocities, joint_accelerations)
+        #C = compute_coriolis_matrix(robot, joint_positions, joint_velocities, joint_accelerations)
 
         # print(f"Coriolis Matrix: {C}")
         # print(f"Coriolis matrix shape: {C.shape}")
@@ -198,7 +226,8 @@ def main():
 
         #################################################################
 
-        if i == collision_index:
+        if current_time > 12 and force_not_applied:
+            force_not_applied = False
             # Retrieve the link positions and orientations
             link_states = p.getLinkStates(robot, range(7))
 
@@ -233,13 +262,15 @@ def main():
 
         ##################### Algorithm ################################
 
-        tau = np.dot(inertia_matrix, joint_accelerations) + np.dot(C, joint_velocities)
+        #tau = np.dot(inertia_matrix, joint_accelerations) + joint_torques_coriolis + joint_torques_gravity
 
         # print(f"Torque: {tau}")
 
         last_residual = residuals[-1]
 
-        integral_sum = tau + np.dot(np.transpose(C), joint_velocities) + np.array(last_residual)
+        #integral_sum = tau + np.dot(np.transpose(C), joint_velocities) + np.array(last_residual)
+        #integral_sum = tau + joint_torques_coriolis+ joint_torques_gravity +  np.array(last_residual)
+        integral_sum = joint_torques_coriolis +  np.array(last_residual)
         integral = integral_sum * current_time
 
         final_sum = p_t - integral - p_0
@@ -247,6 +278,14 @@ def main():
         new_residual = np.dot(gain_matrix, final_sum)
 
         residuals.append(new_residual)
+        threshold = 40
+        if any(abs(num) > threshold for num in new_residual):
+            result_index = find_index_closer_to_zero(new_residual)
+            if result_index is not None:
+                print(new_residual)
+                print("Index of the high number with subsequent numbers closer to 0:", result_index)
+            else:
+                print("No high number found with subsequent numbers closer to 0.")
 
         # print(f"New residual: {new_residual}")
 
@@ -254,23 +293,23 @@ def main():
 
         # TODO: Stop the simulation based on residuals
 
-        if current_time > 1.0:
-            break
+        # if current_time > 1.0:
+        #     break
 
-        # time.sleep(0.25)
+        #time.sleep(0.25)
 
     # Remove initial residual value
     residuals.pop(0)
 
-    print(time_steps)
+    #print(time_steps)
 
-    index = time_steps.index(0.0875)
+    # index = time_steps.index(0.0875)
 
-    time_steps = time_steps[index:]
-    residuals = residuals[index:]
-    all_momenta = all_momenta[index:]
-    all_joint_velocities = all_joint_velocities[index:]
-    kinetic_energy = kinetic_energy[index:]
+    # time_steps = time_steps[index:]
+    # residuals = residuals[index:]
+    # all_momenta = all_momenta[index:]
+    # all_joint_velocities = all_joint_velocities[index:]
+    # kinetic_energy = kinetic_energy[index:]
 
     plot_graph("Plot of residuals over time",
                "residuals",
@@ -305,7 +344,7 @@ def main():
     plt.clf()
 
     positions = all_link_positions[selected_link]
-    positions = positions[index:]
+    #positions = positions[index:]
     plot_3d_graph("Plot of collision-affected link movement",
                   "link_movement",
                   "Euclidean distance",
@@ -405,6 +444,22 @@ def plot_3d_graph(title, figure_name, variable_name, variables):
     ax.set_title(title)
 
     plt.savefig(figure_name+".png")
+
+def find_index_closer_to_zero(numbers):
+    for i in range(len(numbers) - 1):
+        current_value = numbers[i]
+        next_values = numbers[i + 1:]
+
+        if all(abs(current_value) <= abs(value) for value in next_values):
+            return i
+
+    # If no such index is found, return -1 or raise an exception
+    return -1
+
+    return highest_index
+
+
+
 
 
 if __name__ == '__main__':
