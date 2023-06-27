@@ -10,7 +10,7 @@ from mpl_toolkits.mplot3d import Axes3D
 
 
 robot_urdf = "kuka_lbr_iiwa_support/urdf/lbr_iiwa_14_r820.urdf"
-collision_index = 100
+collision_index = None
 
 
 def main():
@@ -52,7 +52,7 @@ def main():
 
     change=[]
     for jointIndex in range(num_joints-2):
-        #targetPositions[jointIndex] = jointPositions[jointIndex]  # Set initial target positions to starting configuration
+        # targetPositions[jointIndex] = jointPositions[jointIndex]
         change.append(final_joint_positions[jointIndex] / duration)  # Calculate increment for each joint
     print(change)
 
@@ -72,6 +72,8 @@ def main():
     all_link_positions = {i: [] for i in range(num_joints)}
     kinetic_energy = []
 
+    position_errors = []
+
     # Display in the simulation how the robot goes from initial position, to our desired position
 
     startTime = time.time()
@@ -81,20 +83,21 @@ def main():
     p.setRealTimeSimulation(0)
     while int(time.time() - startTime) < duration:
         i = i+1
-        #print(i)
+        # print(i)
         
         p.stepSimulation()
         time.sleep(time_step)
 
-        if force_not_applied:
-            curr_pos = [state[0] for state in p.getJointStates(robot, range(7))]
-            move = [ele1+ele2 for ele1, ele2 in zip(curr_pos, change)]
-            # Set all joints to the final desired position
-            for jointIndex in range(num_joints):
-                p.setJointMotorControlArray(robot, range(7), p.POSITION_CONTROL, move)
+        # if force_not_applied:
+        curr_pos = [state[0] for state in p.getJointStates(robot, range(7))]
+        move = [ele1+ele2 for ele1, ele2 in zip(curr_pos, change)]
+
+        # Set all joints to the final desired position
+        for jointIndex in range(num_joints):
+            p.setJointMotorControlArray(robot, range(7), p.POSITION_CONTROL, move)
 
         current_time = time.time()-startTime
-        #print(current_time)
+        # print(current_time)
         time_steps.append(current_time)
         # print(f"Time step: {current_time}")
 
@@ -140,6 +143,10 @@ def main():
         # print(joint_indexes)
         # print(joint_velocities_3D)
 
+        ################################################################
+        error = np.subtract(np.array(joint_positions), np.array(final_joint_positions))
+        error = np.linalg.norm(error)
+        position_errors.append(error)
         ################################################################
 
         inertia_matrix = np.array(p.calculateMassMatrix(robot, joint_positions))
@@ -187,14 +194,6 @@ def main():
         gravity_vector = p.calculateInverseDynamics(robot, list(joint_positions), [0.0] * len(joint_positions), [0.0] *
                                                     len(joint_positions))
 
-        inertia_accelerations = np.dot(inertia_matrix, np.array(joint_accelerations))
-
-        C = np.subtract(tau, gravity_vector)
-        C = np.subtract(C, inertia_accelerations)
-        C = np.divide(C, np.array(joint_velocities).reshape(-1, 1))
-        # print(f"Coriolis matrix: {C}")
-        # print(f"Coriolis matrix shape: {C.shape}")
-
         #################################################################
 
         if current_time > 12 and force_not_applied:
@@ -210,8 +209,11 @@ def main():
 
             # Get the position and orientation of the randomly selected link
             selected_link = random_index
-            selected_link_position = link_positions[random_index]
-            selected_link_orientation = link_orientations[random_index]
+            selected_link_position = link_positions[selected_link]
+            selected_link_orientation = link_orientations[selected_link]
+
+            global collision_index
+            collision_index = i
 
             # Create a visual marker at the selected point
             marker_size = 0.05
@@ -225,19 +227,21 @@ def main():
                                             baseOrientation=selected_link_orientation)
 
             # Run the simulation loop
-            print("FORCE APPLIED AT LINK", random_index)
+            print("\n\n\n\n")
+            print("FORCE APPLIED AT LINK", selected_link)
             print(f"FORCE APPLIED AT TIME: {current_time}")
+            print("\n\n\n\n")
 
         ##################### Algorithm ################################
         if i == 0:
             continue
 
         last_residual = residuals[-1]
-        C_transpose = np.transpose(C)
-        product = np.dot(C_transpose, np.array(joint_velocities))
+        # C_transpose = np.transpose(C)
+        # product = np.dot(C_transpose, np.array(joint_velocities))
 
-        integral_sum = np.add(np.array(tau), product)
-        integral_sum = np.add(integral_sum, np.array(last_residual))
+        # integral_sum = np.add(np.array(tau), product)
+        integral_sum = np.add(np.array(tau), np.array(last_residual))
         integral_sum = np.subtract(integral_sum, gravity_vector)
 
         integral = integral_sum * current_time
@@ -246,17 +250,17 @@ def main():
         new_residual = np.dot(gain_matrix, final_sum)
 
         residuals.append(new_residual)
-        threshold = 40
+        threshold = 10
         mod_r = np.linalg.norm(new_residual)
         if mod_r > threshold:
             result_index = check_r(new_residual)
             if result_index is not None:
-                print(new_residual,mod_r)
+                print(new_residual, mod_r)
                 print("Link :", result_index+1)
             else:
                 print("No high number found with subsequent numbers closer to 0.")
 
-        #print(f"New residual: {new_residual}")
+        print(f"New residual: {new_residual}, mod_r: {mod_r}")
 
         #####################################################
 
@@ -266,6 +270,7 @@ def main():
     all_momenta.pop(0)
     all_joint_velocities.pop(0)
     kinetic_energy.pop(0)
+    position_errors.pop(0)
 
     plot_graph("Plot of residuals over time",
                "residuals",
@@ -291,6 +296,14 @@ def main():
 
     plt.clf()
 
+    plot_scalar_graph("Plot of errors in joint position",
+                      "error",
+                      "Error",
+                      position_errors,
+                      time_steps)
+
+    plt.clf()
+
     plot_scalar_graph("Plot of kinetic energy over time",
                       "kinetic_energy",
                       "Kinetic Energy",
@@ -302,7 +315,7 @@ def main():
     positions = all_link_positions[selected_link]
 
     plot_3d_graph("Plot of collision-affected link movement",
-                  "link_movement",
+                  f"link_movement_{selected_link}",
                   "Euclidean distance",
                   positions)
 
@@ -364,20 +377,22 @@ def plot_3d_graph(title, figure_name, variable_name, variables):
 
     plt.savefig(figure_name+".png")
 
+
 def check_r(numbers):
+
+    print(f"original: {numbers}")
+    numbers = numbers[2:]
+    print(f"modified: {numbers}")
+
     for i in range(len(numbers) - 1):
-        current_value = numbers[i]
+
         next_values = numbers[i + 1:]
 
-        if all(current_value >= value for value in next_values):
-            return i
+        if abs(np.mean(next_values)) < 1:
+            return i+2
 
     # If no such index is found, return -1 or raise an exception
     return -1
-
-
-
-
 
 
 if __name__ == '__main__':
