@@ -81,6 +81,7 @@ def main():
     force_not_applied = True
 
     p.setRealTimeSimulation(0)
+
     while int(time.time() - startTime) < duration:
         i = i+1
         # print(i)
