@@ -33,7 +33,7 @@ def main():
     # Get the number of joints
     num_joints = p.getNumJoints(robot)
 
-    duration=5
+    duration=20
     time_step = 1/240
     p.setTimeStep(time_step)
 
@@ -45,12 +45,11 @@ def main():
                                                          7,
                                                          [0.1, 0.1, 0.4],
                                                          targetOrientation=final_orientation,
-                                                         maxNumIterations = 5*simulation_steps
+                                                         maxNumIterations = simulation_steps
                                                          )
     
     print(final_joint_positions)
 
-    duration = 20  # Duration in seconds
     change=[]
     for jointIndex in range(num_joints-2):
         #targetPositions[jointIndex] = jointPositions[jointIndex]  # Set initial target positions to starting configuration
@@ -80,6 +79,7 @@ def main():
     i = -1
     force_not_applied = True
 
+    p.setRealTimeSimulation(0)
     while int(time.time() - startTime) < duration:
         i = i+1
         #print(i)
@@ -214,13 +214,6 @@ def main():
             selected_link_position = link_positions[random_index]
             selected_link_orientation = link_orientations[random_index]
 
-            force = [400, 550, 700]  # Define the force vector (e.g., 10 N in the x-direction)
-            position = [0, 0, 0]  # Define the position of the external force (e.g., at the joint's origin)
-            p.applyExternalForce(robot, random_index, force, position, p.LINK_FRAME)  # Apply the force
-
-            print("FORCE APPLIED AT LINK", random_index)
-            print(f"FORCE APPLIED AT TIME: {current_time}")
-
             # Create a visual marker at the selected point
             marker_size = 0.05
             marker_color = [1, 0, 0, 1]  # Red color
@@ -231,6 +224,10 @@ def main():
                                             baseCollisionShapeIndex=marker_collision,
                                             basePosition=selected_link_position,
                                             baseOrientation=selected_link_orientation)
+            
+            # Run the simulation loop
+            print("FORCE APPLIED AT LINK", random_index)
+            print(f"FORCE APPLIED AT TIME: {current_time}")
 
         ##################### Algorithm ################################
         if i == 0:
@@ -251,16 +248,16 @@ def main():
 
         residuals.append(new_residual)
         threshold = 40
-
-        if any(abs(num) > threshold for num in new_residual):
-            result_index = find_index_closer_to_zero(new_residual)
+        mod_r = np.linalg.norm(new_residual)
+        if mod_r > threshold:
+            result_index = check_r(new_residual)
             if result_index is not None:
-                print(new_residual)
-                print("Index of the high number with subsequent numbers closer to 0:", result_index)
+                print(new_residual,mod_r)
+                print("Link :", result_index+1)
             else:
                 print("No high number found with subsequent numbers closer to 0.")
 
-        print(f"New residual: {new_residual}")
+        #print(f"New residual: {new_residual}")
 
         #####################################################
 
@@ -368,18 +365,17 @@ def plot_3d_graph(title, figure_name, variable_name, variables):
 
     plt.savefig(figure_name+".png")
 
-def find_index_closer_to_zero(numbers):
+def check_r(numbers):
     for i in range(len(numbers) - 1):
         current_value = numbers[i]
         next_values = numbers[i + 1:]
 
-        if all(abs(current_value) <= abs(value) for value in next_values):
+        if all(current_value >= value for value in next_values):
             return i
 
     # If no such index is found, return -1 or raise an exception
     return -1
 
-    return highest_index
 
 
 
