@@ -33,7 +33,7 @@ def main():
     # Get the number of joints
     num_joints = p.getNumJoints(robot)
 
-    duration=5
+    duration = 20
     time_step = 1/240
     p.setTimeStep(time_step)
 
@@ -45,18 +45,16 @@ def main():
                                                          7,
                                                          [0.1, 0.1, 0.4],
                                                          targetOrientation=final_orientation,
-                                                         maxNumIterations = 5*simulation_steps
+                                                         maxNumIterations=simulation_steps
                                                          )
     
     print(final_joint_positions)
 
-    duration = 20  # Duration in seconds
-    change=[]
+    change = []
     for jointIndex in range(num_joints-2):
         #targetPositions[jointIndex] = jointPositions[jointIndex]  # Set initial target positions to starting configuration
         change.append(final_joint_positions[jointIndex] / duration)  # Calculate increment for each joint
     print(change)
-
 
     p_0 = None
     r_0 = None
@@ -79,6 +77,7 @@ def main():
     startTime = time.time()
     i = -1
     force_not_applied = True
+    p.setRealTimeSimulation(0)
 
     while int(time.time() - startTime) < duration:
         i = i+1
@@ -213,10 +212,6 @@ def main():
             selected_link = random_index
             selected_link_position = link_positions[random_index]
             selected_link_orientation = link_orientations[random_index]
-
-            force = [400, 550, 700]  # Define the force vector (e.g., 10 N in the x-direction)
-            position = [0, 0, 0]  # Define the position of the external force (e.g., at the joint's origin)
-            p.applyExternalForce(robot, random_index, force, position, p.LINK_FRAME)  # Apply the force
 
             print("FORCE APPLIED AT LINK", random_index)
             print(f"FORCE APPLIED AT TIME: {current_time}")
