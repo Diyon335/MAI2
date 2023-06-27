@@ -50,7 +50,7 @@ def main():
     
     print(final_joint_positions)
 
-    change=[]
+    change = []
     for jointIndex in range(num_joints-2):
         # targetPositions[jointIndex] = jointPositions[jointIndex]
         change.append(final_joint_positions[jointIndex] / duration)  # Calculate increment for each joint
@@ -237,10 +237,7 @@ def main():
             continue
 
         last_residual = residuals[-1]
-        # C_transpose = np.transpose(C)
-        # product = np.dot(C_transpose, np.array(joint_velocities))
 
-        # integral_sum = np.add(np.array(tau), product)
         integral_sum = np.add(np.array(tau), np.array(last_residual))
         integral_sum = np.subtract(integral_sum, gravity_vector)
 
