@@ -56,7 +56,6 @@ def main():
         change.append(final_joint_positions[jointIndex] / duration)  # Calculate increment for each joint
     print(change)
 
-
     p_0 = None
     r_0 = None
     previous_velocities = None
@@ -224,7 +223,7 @@ def main():
                                             baseCollisionShapeIndex=marker_collision,
                                             basePosition=selected_link_position,
                                             baseOrientation=selected_link_orientation)
-            
+
             # Run the simulation loop
             print("FORCE APPLIED AT LINK", random_index)
             print(f"FORCE APPLIED AT TIME: {current_time}")
