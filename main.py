@@ -7,10 +7,18 @@ import pybullet_data
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.animation import FuncAnimation
+
+import warnings
+warnings.simplefilter("ignore")
+warnings.filterwarnings("ignore", category=UserWarning, module="pybullet")
+
 
 
 robot_urdf = "kuka_lbr_iiwa_support/urdf/lbr_iiwa_14_r820.urdf"
 collision_index = None
+collison_joint = None
+predicted_joint = None
 
 
 def main():
@@ -30,10 +38,13 @@ def main():
     base_position = [0, 0, 0]
     robot = p.loadURDF(robot_urdf, base_position, useFixedBase=1)
 
+
     # Get the number of joints
     num_joints = p.getNumJoints(robot)
 
-    duration=20
+
+    initial_pos = [state[0] for state in p.getJointStates(robot, range(7))]
+    duration=5
     time_step = 1/240
     p.setTimeStep(time_step)
 
@@ -50,12 +61,10 @@ def main():
     
     print(final_joint_positions)
 
-    change = []
-    for jointIndex in range(num_joints-2):
-        # targetPositions[jointIndex] = jointPositions[jointIndex]
-        change.append(final_joint_positions[jointIndex] / duration)  # Calculate increment for each joint
-    print(change)
 
+
+    trajectory = get_trajectory(simulation_steps,initial_pos,final_joint_positions)
+    
     p_0 = None
     r_0 = None
     previous_velocities = None
@@ -72,8 +81,6 @@ def main():
     all_link_positions = {i: [] for i in range(num_joints)}
     kinetic_energy = []
 
-    position_errors = []
-
     # Display in the simulation how the robot goes from initial position, to our desired position
 
     startTime = time.time()
@@ -81,24 +88,21 @@ def main():
     force_not_applied = True
 
     p.setRealTimeSimulation(0)
-
+    
     while int(time.time() - startTime) < duration:
-        i = i+1
-        # print(i)
-        
-        p.stepSimulation()
-        time.sleep(time_step)
-
-        # if force_not_applied:
-        curr_pos = [state[0] for state in p.getJointStates(robot, range(7))]
-        move = [ele1+ele2 for ele1, ele2 in zip(curr_pos, change)]
-
-        # Set all joints to the final desired position
-        for jointIndex in range(num_joints):
-            p.setJointMotorControlArray(robot, range(7), p.POSITION_CONTROL, move)
-
         current_time = time.time()-startTime
-        # print(current_time)
+        i = i+1
+        #print(i)
+
+        #joint_angles = p.calculateInverseKinematics(robot, 7, pos)
+        p.stepSimulation()
+        # Set the joint angles of the manipulator arm
+        if i< simulation_steps:
+            p.setJointMotorControlArray(robot, range(7), p.POSITION_CONTROL,trajectory[i])
+        
+        #time.sleep(duration / simulation_steps)
+       
+        #print(current_time)
         time_steps.append(current_time)
         # print(f"Time step: {current_time}")
 
@@ -109,6 +113,7 @@ def main():
         joint_types = []
         joint_indexes = []
         joint_velocities_3D = []
+
 
         for joint_index in range(num_joints):
             link_state = p.getLinkState(robot, joint_index, computeLinkVelocity=1, computeForwardKinematics=1)
@@ -137,24 +142,19 @@ def main():
             joint_types.append(j_type)
             joint_velocities_3D.append(j_velocity_3D)
 
-        # print(joint_positions)
-        # print(joint_velocities)
-        # print(joint_names)
-        # print(joint_types)
+        # print("Pos", joint_positions)
+        # print("Vel", joint_velocities)
+        #print(joint_names)
+        #print(joint_types)
         # print(joint_indexes)
         # print(joint_velocities_3D)
 
-        ################################################################
-        error = np.subtract(np.array(joint_positions), np.array(final_joint_positions))
-        error = np.linalg.norm(error)
-        position_errors.append(error)
         ################################################################
 
         inertia_matrix = np.array(p.calculateMassMatrix(robot, joint_positions))
 
         # print(f"Inertia matrix: {inertia_matrix}")
         # print(inertia_matrix.shape)
-
         #################################################################
         ke = np.linalg.multi_dot([np.array(joint_velocities), inertia_matrix,
                                   np.array(joint_velocities).reshape(-1, 1)])
@@ -163,7 +163,7 @@ def main():
         #################################################################
 
         p_t = np.dot(inertia_matrix, joint_velocities)
-
+        #print(p_t)
         if i == 0:
 
             p_0 = np.array(p_t)
@@ -171,6 +171,7 @@ def main():
             previous_velocities = [0 for _ in range(len(joint_positions))]
 
             residuals.append(r_0)
+            #print(residuals)
 
         # print(f"Initial Momentum: {p_0}")
         # print(f"Initial residual: {r_0}")
@@ -195,9 +196,17 @@ def main():
         gravity_vector = p.calculateInverseDynamics(robot, list(joint_positions), [0.0] * len(joint_positions), [0.0] *
                                                     len(joint_positions))
 
+        inertia_accelerations = np.dot(inertia_matrix, np.array(joint_accelerations))
+
+        # C = np.subtract(tau, gravity_vector)
+        # C = np.subtract(C, inertia_accelerations)
+        # C = np.divide(C, np.array(joint_velocities).reshape(-1, 1))
+        # print(f"Coriolis matrix: {C}")
+        # print(f"Coriolis matrix shape: {C.shape}")
+
         #################################################################
 
-        if current_time > 12 and force_not_applied:
+        if current_time > 2.5 and force_not_applied:
             force_not_applied = False
             # Retrieve the link positions and orientations
             link_states = p.getLinkStates(robot, range(7))
@@ -210,11 +219,12 @@ def main():
 
             # Get the position and orientation of the randomly selected link
             selected_link = random_index
-            selected_link_position = link_positions[selected_link]
-            selected_link_orientation = link_orientations[selected_link]
+            selected_link_position = link_positions[random_index]
+            selected_link_orientation = link_orientations[random_index]
 
             global collision_index
             collision_index = i
+        
 
             # Create a visual marker at the selected point
             marker_size = 0.05
@@ -226,12 +236,13 @@ def main():
                                             baseCollisionShapeIndex=marker_collision,
                                             basePosition=selected_link_position,
                                             baseOrientation=selected_link_orientation)
-
+            
             # Run the simulation loop
-            print("\n\n\n\n")
-            print("FORCE APPLIED AT LINK", selected_link)
+            global collison_joint
+            collison_joint = random_index
+            print(collison_joint)
+            print("FORCE APPLIED AT LINK", random_index)
             print(f"FORCE APPLIED AT TIME: {current_time}")
-            print("\n\n\n\n")
 
         ##################### Algorithm ################################
         if i == 0:
@@ -250,15 +261,17 @@ def main():
         residuals.append(new_residual)
         threshold = 10
         mod_r = np.linalg.norm(new_residual)
+        global predicted_index
         if mod_r > threshold:
             result_index = check_r(new_residual)
             if result_index is not None:
                 print(new_residual, mod_r)
                 print("Link :", result_index+1)
+                predicted_index = result_index+1
             else:
                 print("No high number found with subsequent numbers closer to 0.")
 
-        print(f"New residual: {new_residual}, mod_r: {mod_r}")
+        #print(f"New residual: {new_residual}, mod_r: {mod_r}")
 
         #####################################################
 
@@ -268,11 +281,10 @@ def main():
     all_momenta.pop(0)
     all_joint_velocities.pop(0)
     kinetic_energy.pop(0)
-    position_errors.pop(0)
 
     plot_graph("Plot of residuals over time",
                "residuals",
-               "Residual",
+               "Residual (kg rad $s^{-1}$)",
                residuals,
                time_steps)
 
@@ -280,7 +292,7 @@ def main():
 
     plot_graph("Plot of momenta over time",
                "momenta",
-               "Momentum (kg/rad s-2)",
+               "Momentum (kg rad $s^{-1}$)",
                all_momenta,
                time_steps)
 
@@ -288,23 +300,15 @@ def main():
 
     plot_graph("Plot of velocity over time",
                "velocities",
-               "Velocity (rad s-1)",
+               "Velocity (rad $s^{-1}$)",
                all_joint_velocities,
                time_steps)
 
     plt.clf()
 
-    plot_scalar_graph("Plot of errors in joint position",
-                      "error",
-                      "Error",
-                      position_errors,
-                      time_steps)
-
-    plt.clf()
-
     plot_scalar_graph("Plot of kinetic energy over time",
                       "kinetic_energy",
-                      "Kinetic Energy",
+                      "Kinetic Energy (kg $rad^2$ $s^{-2}$)",
                       kinetic_energy,
                       time_steps)
 
@@ -313,11 +317,13 @@ def main():
     positions = all_link_positions[selected_link]
 
     plot_3d_graph("Plot of collision-affected link movement",
-                  f"link_movement_{selected_link}",
+                  "link_movement",
                   "Euclidean distance",
                   positions)
 
     p.disconnect()
+
+    return collison_joint,predicted_index
 
 
 def plot_scalar_graph(title, figure_name, variable_name, variables, time_steps):
@@ -375,7 +381,6 @@ def plot_3d_graph(title, figure_name, variable_name, variables):
 
     plt.savefig(figure_name+".png")
 
-
 def check_r(numbers):
 
     print(f"original: {numbers}")
@@ -391,6 +396,18 @@ def check_r(numbers):
 
     # If no such index is found, return -1 or raise an exception
     return -1
+
+def get_trajectory(num_steps,initial_pos,final_pos): 
+    trajectory = []  # List to store intermediate end effector positions
+    for step in range(num_steps):
+        t = step / float(num_steps)  # Normalized time from 0.0 to 1.0
+        # Calculate position for this step using linear interpolation
+        interpolated_pos = np.add(initial_pos, np.multiply(t, np.subtract(final_pos, initial_pos)))
+        trajectory.append(interpolated_pos)
+    
+    return trajectory
+# Manipulator arm should have moved to the desired final position
+
 
 
 if __name__ == '__main__':
